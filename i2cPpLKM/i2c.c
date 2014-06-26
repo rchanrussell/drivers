@@ -118,9 +118,6 @@ static int i2c_out(char c) {
   int n;
   char d;
   char ack_nack;
-/*
-printk("<1>i2c_out %x\n",c);
-*/
   d = c;
   for (n=0; n<8; n++) {
     if ((d & 0x80) == 0x80) {
@@ -149,7 +146,7 @@ printk("<1>i2c_out %x\n",c);
       i2c_pulseSCL();
     }
     ack_nack = i2c_getSDA();
-printk("<1>i2c: ack_nack after pulse 0x%x\n",ack_nack);
+printk("<1>i2c_out: ack_nack after additional pulse 0x%x\n",ack_nack);
   }
   
   /* set SCL L */
@@ -248,9 +245,37 @@ static int close_i2c(struct inode *inode, struct file *file) {
 }
 
 static ssize_t read_i2c(struct file *file, char *buf, size_t len, loff_t *ofs) {
-  printk("<1>read_i2c -reads performed using write command\n");
-  printk("<1>read_i2c -set bit3 of control byte, then addr then bytes to read\n"); 
-  return len;
+  unsigned char readNum = 0;
+  char i2c_buf[128]; /* page size */
+  char i2c_rd[128];/*diff addr required, another write/read reqd for more */
+  size_t retVal = 0;
+
+  /* grab slvAddr and number of bytes to read, max 128 */
+  if(copy_from_user(&i2c_buf,buf,2) != 0) {
+    printk("<1>read_i2c - failed to copy slvAddr and numBytes from user\n");
+    retVal = -1;
+  } else { 
+        // for 1MBit device, page size 128 bytes 
+    if(i2c_buf[1] > 128) {
+      readNum = 128;
+    } else {
+      readNum = i2c_buf[1];
+    }
+    retVal=readNum;
+
+    i2c_start();
+    read_i2cOBAT(&i2c_buf, &i2c_rd);
+    i2c_stop();
+
+    /* copy back to user, overwriting supllied buffer */
+    if(copy_to_user((void *)buf,&i2c_rd,readNum) != 0) {
+      printk("<1>read_i2c - read from device - copy_to_user failure\n");
+      printk("<1>read_i2c - read from device - ensure buffer large enough\n");
+      retVal = -1;
+    }
+  } /* slaveAddr + datasize */
+  
+  return retVal;
 }
 
 static void read_i2cOBAT(void *i2c_buf, void *i2c_rd) {
@@ -262,24 +287,21 @@ static void read_i2cOBAT(void *i2c_buf, void *i2c_rd) {
   int l=0;
 
   /* cfg for read */
-  pB++; /* i2c_buf[1] */
   slvAddr = *pB;
-  pB++; /* i2c_buf[2] */
+  pB++; /* i2c_buf[1] */
   /* for 1MBit device, page size 128 bytes */
   if(*pB > 128) {
     readNum = 128;
   } else {
     readNum = *pB;
   }
-printk("<1>i2c_write: reading %d bytes\n",readNum);
   msleep(10);
   /* loop for num bytes */
   for (l=0; l<readNum; l++) {
     /* send cfg */
     if(i2c_out(slvAddr) < 0) {
-      printk("<1>i2c: NACK received sending 0x%x\n",*pB);
+      printk("<1>read_i2cOBAT: NACK received sending 0x%x\n",*pB);
     }
-
     /* read one B */
     byteRead = i2c_in();
     /* send NACK */
@@ -288,6 +310,7 @@ printk("<1>i2c_write: reading %d bytes\n",readNum);
     i2c_stop();
     msleep(10);
     i2c_start();
+
     *pR = byteRead;
     pR++;
   } /* readNum loop */
@@ -296,7 +319,6 @@ printk("<1>i2c_write: reading %d bytes\n",readNum);
 static ssize_t write_i2c(struct file *file, const char *buf, size_t len, loff_t *ofs) {
   char i2c_ctrl;
   char i2c_lcd;
-  unsigned char readNum=0;
 /* uncomment when have timing fixed
   unsigned char byteRead=0;
 */
@@ -304,7 +326,6 @@ static ssize_t write_i2c(struct file *file, const char *buf, size_t len, loff_t 
   size_t retVal = len;
   /* buffer writing to device */
   char i2c_buf[128]; /* page size */
-  char i2c_rd[128];/*diff addr required, another write/read reqd for more */
 
   if (len == 0) {return 0;}
 
@@ -317,7 +338,6 @@ static ssize_t write_i2c(struct file *file, const char *buf, size_t len, loff_t 
    * b0 - send start
    * b1 - send stop (last operation)
    * b2 - reset
-   * b3 - read
    * b4 - initLCD (specific - for testing only)
    * b5 - write to LCD
    * Order Processed:
@@ -348,59 +368,15 @@ static ssize_t write_i2c(struct file *file, const char *buf, size_t len, loff_t 
       i2c_out(i2c_lcd);
     }
 
-    if (i2c_ctrl & 0x08){
-      if (len != 3) {
-        printk("<1>i2c_write error - 3 bytes, ctrl,slaveAddr,numBytes\n");
-      } else {
-/* removed due to timing issue i cannot resolve
- * cannot seem to send more than one byte, regardless
- * of ACK timing - works on Arduino with some timing tweaks
- * but cannot replicate here
- * send one byte at a time instead
-        // cfg for read 
-        if(i2c_out(i2c_buf[1]) < 0) {
-            printk("<1>i2c: NACK received sending 0x%x\n",i2c_buf[1]);
-        }
-        // for 1MBit device, page size 128 bytes 
-        if(i2c_buf[2] > 128) {
-          readNum = 128;
-        } else {
-          readNum = i2c_buf[2];
-        }
-  printk("<1>i2c_write: reading %d bytes\n",readNum);
-        msleep(10);
-        for (l=0; l<readNum; l++) {
-  	  if (l == (readNum-1)) {
-            byteRead = i2c_in();
-  	  i2c_sendACK(0x1);
-          } else {
-            byteRead = i2c_in();
-  	    msleep(1);
-  	    i2c_sendACK(0x0);
-  	    msleep(10);
-          }
-          i2c_rd[l] = byteRead;
-        }
-*/
-        // for 1MBit device, page size 128 bytes 
-        if(i2c_buf[2] > 128) {
-          readNum = 128;
-        } else {
-          readNum = i2c_buf[2];
-        }
-        retVal=readNum;
-        read_i2cOBAT(&i2c_buf, &i2c_rd);
-
-      } /* ctrl + slaveAddr + datasize */
-    } else {
     /* send passed data, bypassing ctrl byte */
-printk("<1>i2c_write: writng %d bytes\n",len-1);
+printk("<1>write_i2c: writng %d bytes\n",len-1);
       for (l=1; l<len; l++) {
+printk("<1>write_i2c: sending 0x%x\n",i2c_buf[l]);
         if(i2c_out(i2c_buf[l]) < 0) {
-          printk("<1>i2c: NACK received sending 0x%x\n",i2c_buf[l]);
+          printk("<1>write_i2c: NACK received sending 0x%x\n",i2c_buf[l]);
         }
       }
-    }
+
     if (i2c_ctrl & 0x2) {
     i2c_stop();
     }
@@ -414,7 +390,7 @@ static int init_i2c(void) {
 
   Major = register_chrdev(0, "i2c", &fops);//character device - virtual
   if (Major < 0) {
-    printk(KERN_ALERT "rand: registration of device failed: %d\n",Major);
+    printk(KERN_ALERT "i2c: registration of device failed: %d\n",Major);
     return Major;
   }
 
