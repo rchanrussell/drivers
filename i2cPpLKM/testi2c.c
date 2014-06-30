@@ -11,7 +11,7 @@ int main(int argc, char *argv[]) {
   int bytes = 0;
   int len = argc-1;
   unsigned char ctrl = 0;
-  unsigned char buf[128];/* max of device read/write page */
+  unsigned char buf[131];/* max of device read/write page 128B + config + two addr bytes */
 /*
   unsigned char buf[] = {0x55,0x44,0x33,0x22,0x11};
 */
