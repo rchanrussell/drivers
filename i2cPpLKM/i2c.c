@@ -246,7 +246,7 @@ static int close_i2c(struct inode *inode, struct file *file) {
 
 static ssize_t read_i2c(struct file *file, char *buf, size_t len, loff_t *ofs) {
   unsigned char readNum = 0;
-  char i2c_buf[128]; /* page size */
+  char i2c_buf[2]; /* page size */
   char i2c_rd[128];/*diff addr required, another write/read reqd for more */
   size_t retVal = 0;
 
@@ -325,9 +325,13 @@ static ssize_t write_i2c(struct file *file, const char *buf, size_t len, loff_t 
   int l =0;
   size_t retVal = len;
   /* buffer writing to device */
-  char i2c_buf[128]; /* page size */
+  char i2c_buf[131]; /* page size + 3 bytes for config and device memory address*/
 
   if (len == 0) {return 0;}
+  if (len > 131) {
+    return -1;
+    printk("<1>write_i2c: max data transfer, 131 bytes!\n");
+  }
 
   if(copy_from_user(&i2c_buf,buf,len) != 0x0) {
     return -EFAULT;
